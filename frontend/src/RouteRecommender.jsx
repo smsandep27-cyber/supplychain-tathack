@@ -1,15 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Truck, Ship, Plane, Train,
-  AlertTriangle, ShieldCheck, Clock, DollarSign,
-  Navigation, MapPin, ChevronRight, Info,
-  Filter, ShieldAlert, Zap, Globe, Package,
-  ArrowRightLeft, AlertCircle, BarChart3, Activity, Layers, Terminal
+  Truck,
+  Ship,
+  Plane,
+  Train,
+  AlertTriangle,
+  ShieldCheck,
+  Clock,
+  Navigation,
+  Zap,
+  Globe,
+  ArrowRightLeft,
+  BarChart3,
+  Activity,
+  Layers,
+  Terminal
 } from 'lucide-react';
 
 const RouteRecommender = ({ onNavigate }) => {
   const [source, setSource] = useState('');
   const [destination, setDestination] = useState('');
+
   const [transportMode, setTransportMode] = useState('any');
   const [routingPolicy, setRoutingPolicy] = useState('STRICT');
   const [operationalConfig, setOperationalConfig] = useState('NORMAL');
@@ -32,107 +43,50 @@ const RouteRecommender = ({ onNavigate }) => {
 
   const [scenarios, setScenarios] = useState([]);
 
-  // Load available disruption scenarios
+  // ============================================================
+  // LOAD SCENARIOS
+  // ============================================================
+
   useEffect(() => {
-    fetch('/api/scenarios')
-      .then(r => {
-        if (!r.ok) {
-          throw new Error('Failed to load scenarios');
+    const loadScenarios = async () => {
+      try {
+        const res = await fetch('/api/scenarios');
+
+        if (!res.ok) {
+          throw new Error(`Scenario API returned ${res.status}`);
         }
-        return r.json();
-      })
-      .then(data => {
+
+        const data = await res.json();
+
         setScenarios(Array.isArray(data) ? data : []);
-      })
-      .catch(e => {
-        console.error('Failed to load scenarios:', e);
+      } catch (err) {
+        console.error('Failed to load scenarios:', err);
         setScenarios([]);
-      });
+      }
+    };
+
+    loadScenarios();
   }, []);
 
-  // Request route recommendations
-  const getRecommendations = async () => {
-    if (!source || !destination) {
-      setError('Please select both an origin and destination hub.');
-      return;
-    }
+  // ============================================================
+  // SEARCH HUBS
+  // ============================================================
 
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch('/api/recommend', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          source,
-          destination,
-          transport_preference: transportMode,
-          routing_policy: routingPolicy,
-          cargo_type: cargoType,
-          priority,
-          scenario:
-            operationalConfig !== 'NORMAL'
-              ? operationalConfig
-              : null
-        })
-      });
-
-      if (!res.ok) {
-        throw new Error(`Backend returned ${res.status} `);
-      }
-
-      const data = await res.json();
-
-      if (data.error) {
-        setError(data.error);
-        setRecommendations([]);
-      } else {
-        setRecommendations(
-          Array.isArray(data.recommendations)
-            ? data.recommendations
-            : []
-        );
-      }
-    } catch (err) {
-      console.error('Recommendation request failed:', err);
-      setError(
-        'Engine connection failed. Verify backend status.'
-      );
-      setRecommendations([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Transport mode icons
-  const getModeIcon = (mode = '') => {
-    switch (mode.toLowerCase()) {
-      case 'air':
-        return <Plane size={12} />;
-      case 'sea':
-        return <Ship size={12} />;
-      case 'rail':
-        return <Train size={12} />;
-      case 'road':
-        return <Truck size={12} />;
-      case 'transfer':
-        return <ArrowRightLeft size={12} />;
-      default:
-        return <Navigation size={12} />;
-    }
-  };
-
-  // Search hubs
   const handleSearch = async (type, query) => {
     setSearchQuery(prev => ({
       ...prev,
       [type]: query
     }));
 
-    if (query.length < 2) {
+    // Clear previously selected internal ID
+    // when the user changes the text.
+    if (type === 'source') {
+      setSource('');
+    } else {
+      setDestination('');
+    }
+
+    if (query.trim().length < 2) {
       setSearchResults(prev => ({
         ...prev,
         [type]: []
@@ -142,11 +96,11 @@ const RouteRecommender = ({ onNavigate }) => {
 
     try {
       const res = await fetch(
-        `/ api / hubs / search ? q = ${encodeURIComponent(query)} `
+        `/api/hubs/search?q=${encodeURIComponent(query.trim())}`
       );
 
       if (!res.ok) {
-        throw new Error('Hub search failed');
+        throw new Error(`Hub search returned ${res.status}`);
       }
 
       const data = await res.json();
@@ -156,7 +110,8 @@ const RouteRecommender = ({ onNavigate }) => {
         [type]: Array.isArray(data) ? data : []
       }));
     } catch (err) {
-      console.error('Search failed:', err);
+      console.error('Hub search failed:', err);
+
       setSearchResults(prev => ({
         ...prev,
         [type]: []
@@ -164,21 +119,28 @@ const RouteRecommender = ({ onNavigate }) => {
     }
   };
 
-  // Select hub from search results
+  // ============================================================
+  // SELECT HUB
+  // ============================================================
+
   const selectHub = (type, hub) => {
+    if (!hub?.id) {
+      return;
+    }
+
     if (type === 'source') {
       setSource(hub.id);
 
       setSearchQuery(prev => ({
         ...prev,
-        source: hub.display_name
+        source: hub.display_name || hub.id
       }));
     } else {
       setDestination(hub.id);
 
       setSearchQuery(prev => ({
         ...prev,
-        dest: hub.display_name
+        dest: hub.display_name || hub.id
       }));
     }
 
@@ -188,7 +150,259 @@ const RouteRecommender = ({ onNavigate }) => {
     }));
   };
 
-  // Safely format numbers
+  // ============================================================
+  // RESOLVE HUB FROM TYPED TEXT
+  // ============================================================
+
+  const resolveHub = async query => {
+    if (!query?.trim()) {
+      return null;
+    }
+
+    try {
+      const res = await fetch(
+        `/api/hubs/search?q=${encodeURIComponent(query.trim())}`
+      );
+
+      if (!res.ok) {
+        return null;
+      }
+
+      const data = await res.json();
+
+      if (!Array.isArray(data) || data.length === 0) {
+        return null;
+      }
+
+      const normalizedQuery = query.trim().toLowerCase();
+
+      // Prefer exact ID/display-name/alias matches.
+      const exactMatch = data.find(hub => {
+        const id = String(hub.id || '').toLowerCase();
+        const displayName = String(
+          hub.display_name || ''
+        ).toLowerCase();
+
+        const aliases = Array.isArray(hub.aliases)
+          ? hub.aliases.map(alias =>
+            String(alias).toLowerCase()
+          )
+          : [];
+
+        return (
+          id === normalizedQuery ||
+          displayName === normalizedQuery ||
+          aliases.includes(normalizedQuery)
+        );
+      });
+
+      // Then prefer partial matches.
+      const partialMatch = data.find(hub => {
+        const id = String(hub.id || '').toLowerCase();
+        const displayName = String(
+          hub.display_name || ''
+        ).toLowerCase();
+
+        const aliases = Array.isArray(hub.aliases)
+          ? hub.aliases.map(alias =>
+            String(alias).toLowerCase()
+          )
+          : [];
+
+        return (
+          id.includes(normalizedQuery) ||
+          displayName.includes(normalizedQuery) ||
+          aliases.some(alias =>
+            alias.includes(normalizedQuery)
+          )
+        );
+      });
+
+      return exactMatch || partialMatch || data[0];
+    } catch (err) {
+      console.error('Hub resolution failed:', err);
+      return null;
+    }
+  };
+
+  // ============================================================
+  // GET RECOMMENDATIONS
+  // ============================================================
+
+  const getRecommendations = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Always resolve from the visible input fields.
+      // This prevents React state timing from causing
+      // "valid hub" requests to be rejected.
+
+      const originQuery = searchQuery.source.trim();
+      const destinationQuery = searchQuery.dest.trim();
+
+      if (!originQuery || !destinationQuery) {
+        throw new Error(
+          'Please enter both origin and destination hubs.'
+        );
+      }
+
+      // ----------------------------------------------------------
+      // Resolve origin
+      // ----------------------------------------------------------
+
+      const originHub = await resolveHub(originQuery);
+
+      if (!originHub?.id) {
+        throw new Error(
+          `No origin hub found for "${originQuery}".`
+        );
+      }
+
+      const resolvedSource = originHub.id;
+
+      // ----------------------------------------------------------
+      // Resolve destination
+      // ----------------------------------------------------------
+
+      const destinationHub =
+        await resolveHub(destinationQuery);
+
+      if (!destinationHub?.id) {
+        throw new Error(
+          `No destination hub found for "${destinationQuery}".`
+        );
+      }
+
+      const resolvedDestination =
+        destinationHub.id;
+
+      console.log(
+        '[ROUTER] Resolved origin:',
+        resolvedSource
+      );
+
+      console.log(
+        '[ROUTER] Resolved destination:',
+        resolvedDestination
+      );
+
+      // Keep internal state synchronized.
+      setSource(resolvedSource);
+      setDestination(resolvedDestination);
+
+      // Update visible names to canonical backend names.
+      setSearchQuery(prev => ({
+        ...prev,
+        source:
+          originHub.display_name ||
+          resolvedSource,
+        dest:
+          destinationHub.display_name ||
+          resolvedDestination
+      }));
+
+      // ----------------------------------------------------------
+      // Request strategic routes
+      // ----------------------------------------------------------
+
+      const response = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          source: resolvedSource,
+          destination: resolvedDestination,
+          cargo_type: cargoType,
+          priority,
+          transport_preference: transportMode,
+          routing_policy: routingPolicy,
+          scenario:
+            operationalConfig !== 'NORMAL'
+              ? operationalConfig
+              : null,
+          overrides: {}
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Recommendation API returned ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      console.log(
+        '[ROUTER] Recommendation response:',
+        data
+      );
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      const routes = Array.isArray(
+        data.recommendations
+      )
+        ? data.recommendations
+        : [];
+
+      if (routes.length === 0) {
+        throw new Error(
+          'The routing engine returned no valid recommendations.'
+        );
+      }
+
+      setRecommendations(routes);
+    } catch (err) {
+      console.error(
+        '[ROUTER] Recommendation failed:',
+        err
+      );
+
+      setRecommendations([]);
+
+      setError(
+        err?.message ||
+        'Failed to generate strategic routes.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ============================================================
+  // MODE ICON
+  // ============================================================
+
+  const getModeIcon = (mode = '') => {
+    switch (String(mode).toLowerCase()) {
+      case 'air':
+        return <Plane size={12} />;
+
+      case 'sea':
+        return <Ship size={12} />;
+
+      case 'rail':
+        return <Train size={12} />;
+
+      case 'road':
+        return <Truck size={12} />;
+
+      case 'transfer':
+        return <ArrowRightLeft size={12} />;
+
+      default:
+        return <Navigation size={12} />;
+    }
+  };
+
+  // ============================================================
+  // NUMBER FORMAT
+  // ============================================================
+
   const formatNumber = value => {
     const number = Number(value);
 
@@ -199,22 +413,33 @@ const RouteRecommender = ({ onNavigate }) => {
     return number.toLocaleString();
   };
 
-  // Safely read ML prediction
+  // ============================================================
+  // ML PREDICTION COMPATIBILITY
+  // ============================================================
+
   const getMLPrediction = recommendation => {
+    if (!recommendation) {
+      return null;
+    }
+
     return (
-      recommendation?.ml_prediction ||
-      recommendation?.ai_prediction ||
-      recommendation?.delay_prediction ||
+      recommendation.ml_prediction ||
+      recommendation.ai_prediction ||
+      recommendation.delay_prediction ||
       null
     );
   };
 
+  // ============================================================
+  // RENDER
+  // ============================================================
+
   return (
     <div className="dashboard-layout">
 
-      {/* =========================================================
+      {/* ========================================================
           HEADER
-      ========================================================= */}
+      ======================================================== */}
 
       <header className="dashboard-header">
 
@@ -225,7 +450,10 @@ const RouteRecommender = ({ onNavigate }) => {
             gap: '1rem'
           }}
         >
-          <Globe size={28} color="#3b82f6" />
+          <Globe
+            size={28}
+            color="#3b82f6"
+          />
 
           <div>
             <h1
@@ -257,8 +485,12 @@ const RouteRecommender = ({ onNavigate }) => {
         >
           <button
             className="sc-badge-active"
-            onClick={() => onNavigate('suppliers')}
-            style={{ cursor: 'pointer' }}
+            onClick={() =>
+              onNavigate?.('suppliers')
+            }
+            style={{
+              cursor: 'pointer'
+            }}
           >
             <ShieldCheck size={14} />
             SUPPLIER INTELLIGENCE
@@ -267,9 +499,9 @@ const RouteRecommender = ({ onNavigate }) => {
 
       </header>
 
-      {/* =========================================================
+      {/* ========================================================
           LEFT COMMAND PANEL
-      ========================================================= */}
+      ======================================================== */}
 
       <aside className="sidebar-left">
 
@@ -278,7 +510,7 @@ const RouteRecommender = ({ onNavigate }) => {
           Strategic Input Panel
         </h2>
 
-        {/* Origin */}
+        {/* Origin Hub */}
         <div className="sc-input-group">
 
           <label className="sc-label">
@@ -289,7 +521,10 @@ const RouteRecommender = ({ onNavigate }) => {
             type="text"
             value={searchQuery.source}
             onChange={e =>
-              handleSearch('source', e.target.value)
+              handleSearch(
+                'source',
+                e.target.value
+              )
             }
             className="sc-input"
             placeholder="Search origin..."
@@ -299,39 +534,49 @@ const RouteRecommender = ({ onNavigate }) => {
             <div
               style={{
                 background: '#0f172a',
-                border: '1px solid #1e293b',
+                border:
+                  '1px solid #1e293b',
                 borderRadius: '4px',
-                marginTop: '2px'
+                marginTop: '2px',
+                maxHeight: '220px',
+                overflowY: 'auto'
               }}
             >
-              {searchResults.source.map((h, idx) => (
-                <button
-                  key={`${h.id} -${idx} `}
-                  onClick={() =>
-                    selectHub('source', h)
-                  }
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    textAlign: 'left',
-                    background: 'none',
-                    border: 'none',
-                    color: 'white',
-                    borderBottom:
-                      '1px solid #1e293b',
-                    cursor: 'pointer',
-                    fontSize: '0.8rem'
-                  }}
-                >
-                  {h.display_name}
-                </button>
-              ))}
+              {searchResults.source.map(
+                (hub, idx) => (
+                  <button
+                    key={`${hub.id}-${idx}`}
+                    type="button"
+                    onClick={() =>
+                      selectHub(
+                        'source',
+                        hub
+                      )
+                    }
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      textAlign: 'left',
+                      background: 'none',
+                      border: 'none',
+                      color: 'white',
+                      borderBottom:
+                        '1px solid #1e293b',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem'
+                    }}
+                  >
+                    {hub.display_name ||
+                      hub.id}
+                  </button>
+                )
+              )}
             </div>
           )}
 
         </div>
 
-        {/* Destination */}
+        {/* Destination Hub */}
         <div className="sc-input-group">
 
           <label className="sc-label">
@@ -342,7 +587,10 @@ const RouteRecommender = ({ onNavigate }) => {
             type="text"
             value={searchQuery.dest}
             onChange={e =>
-              handleSearch('dest', e.target.value)
+              handleSearch(
+                'dest',
+                e.target.value
+              )
             }
             className="sc-input"
             placeholder="Search destination..."
@@ -352,39 +600,49 @@ const RouteRecommender = ({ onNavigate }) => {
             <div
               style={{
                 background: '#0f172a',
-                border: '1px solid #1e293b',
+                border:
+                  '1px solid #1e293b',
                 borderRadius: '4px',
-                marginTop: '2px'
+                marginTop: '2px',
+                maxHeight: '220px',
+                overflowY: 'auto'
               }}
             >
-              {searchResults.dest.map((h, idx) => (
-                <button
-                  key={`${h.id} -${idx} `}
-                  onClick={() =>
-                    selectHub('dest', h)
-                  }
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    textAlign: 'left',
-                    background: 'none',
-                    border: 'none',
-                    color: 'white',
-                    borderBottom:
-                      '1px solid #1e293b',
-                    cursor: 'pointer',
-                    fontSize: '0.8rem'
-                  }}
-                >
-                  {h.display_name}
-                </button>
-              ))}
+              {searchResults.dest.map(
+                (hub, idx) => (
+                  <button
+                    key={`${hub.id}-${idx}`}
+                    type="button"
+                    onClick={() =>
+                      selectHub(
+                        'dest',
+                        hub
+                      )
+                    }
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      textAlign: 'left',
+                      background: 'none',
+                      border: 'none',
+                      color: 'white',
+                      borderBottom:
+                        '1px solid #1e293b',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem'
+                    }}
+                  >
+                    {hub.display_name ||
+                      hub.id}
+                  </button>
+                )
+              )}
             </div>
           )}
 
         </div>
 
-        {/* Transport */}
+        {/* Transport Mode */}
         <div className="sc-input-group">
 
           <label className="sc-label">
@@ -394,7 +652,9 @@ const RouteRecommender = ({ onNavigate }) => {
           <select
             value={transportMode}
             onChange={e =>
-              setTransportMode(e.target.value)
+              setTransportMode(
+                e.target.value
+              )
             }
             className="sc-select"
           >
@@ -431,7 +691,9 @@ const RouteRecommender = ({ onNavigate }) => {
           <select
             value={routingPolicy}
             onChange={e =>
-              setRoutingPolicy(e.target.value)
+              setRoutingPolicy(
+                e.target.value
+              )
             }
             className="sc-select"
           >
@@ -446,7 +708,7 @@ const RouteRecommender = ({ onNavigate }) => {
 
         </div>
 
-        {/* Scenario */}
+        {/* Operational Configuration */}
         <div className="sc-input-group">
 
           <label className="sc-label">
@@ -456,30 +718,33 @@ const RouteRecommender = ({ onNavigate }) => {
           <select
             value={operationalConfig}
             onChange={e =>
-              setOperationalConfig(e.target.value)
+              setOperationalConfig(
+                e.target.value
+              )
             }
             className="sc-select"
             style={{
               borderColor:
-                operationalConfig !== 'NORMAL'
+                operationalConfig !==
+                  'NORMAL'
                   ? '#ef4444'
                   : '#1e293b'
             }}
           >
-
             <option value="NORMAL">
               Operational Normal
             </option>
 
-            {scenarios.map(s => (
-              <option
-                key={s.id}
-                value={s.id}
-              >
-                {s.name}
-              </option>
-            ))}
-
+            {scenarios.map(
+              scenario => (
+                <option
+                  key={scenario.id}
+                  value={scenario.id}
+                >
+                  {scenario.name}
+                </option>
+              )
+            )}
           </select>
 
         </div>
@@ -511,6 +776,7 @@ const RouteRecommender = ({ onNavigate }) => {
 
         {/* Execute */}
         <button
+          type="button"
           className="sc-btn-execute"
           onClick={getRecommendations}
           disabled={loading}
@@ -527,47 +793,51 @@ const RouteRecommender = ({ onNavigate }) => {
 
       </aside>
 
-      {/* =========================================================
+      {/* ========================================================
           MAIN CONTENT
-      ========================================================= */}
+      ======================================================== */}
 
       <main className="main-content">
 
-        {/* Scenario Banner */}
-        {operationalConfig !== 'NORMAL' && (
-          <div className="scenario-banner animate-slide-in">
+        {/* Disruption Banner */}
+        {operationalConfig !==
+          'NORMAL' && (
+            <div className="scenario-banner animate-slide-in">
 
-            <AlertTriangle size={20} />
+              <AlertTriangle size={20} />
 
-            <div>
+              <div>
 
-              <span
-                style={{
-                  fontWeight: 800,
-                  fontSize: '0.75rem',
-                  display: 'block'
-                }}
-              >
-                ACTIVE GLOBAL DISRUPTION DETECTED
-              </span>
+                <span
+                  style={{
+                    fontWeight: 800,
+                    fontSize: '0.75rem',
+                    display: 'block'
+                  }}
+                >
+                  ACTIVE GLOBAL DISRUPTION DETECTED
+                </span>
 
-              <span
-                style={{
-                  fontSize: '0.875rem'
-                }}
-              >
-                {(
-                  scenarios.find(
-                    s => s.id === operationalConfig
-                  )?.name
-                ) || operationalConfig}{' '}
-                logic active in unified solver.
-              </span>
+                <span
+                  style={{
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  {(
+                    scenarios.find(
+                      scenario =>
+                        scenario.id ===
+                        operationalConfig
+                    )?.name
+                  ) ||
+                    operationalConfig}{' '}
+                  logic active in unified solver.
+                </span>
+
+              </div>
 
             </div>
-
-          </div>
-        )}
+          )}
 
         {/* Error */}
         {error && (
@@ -590,197 +860,255 @@ const RouteRecommender = ({ onNavigate }) => {
         {/* Route Cards */}
         <div className="path-grid">
 
-          {recommendations.map((rec, idx) => (
-
-            <div
-              key={idx}
-              className="path-card"
-            >
-
-              <div className="card-header">
-
-                <span
-                  className={`persona - badge ${rec.persona === 'FASTEST'
-                      ? 'tag-fastest'
-                      : rec.persona === 'SAFEST'
-                        ? 'tag-safest'
-                        : 'tag-balanced'
-                    } `}
-                >
-                  {rec.persona}
-                </span>
-
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    fontSize: '0.75rem',
-                    fontFamily:
-                      'JetBrains Mono'
-                  }}
-                >
-                  <Clock size={12} />
-                  {rec.adjusted_eta ?? '--'}h
-                </div>
-
-              </div>
-
+          {recommendations.map(
+            (rec, idx) => (
               <div
-                style={{
-                  padding: '1.25rem'
-                }}
+                key={`${rec.persona || 'route'}-${idx}`}
+                className="path-card"
               >
 
-                <h3
-                  style={{
-                    fontSize: '0.9rem',
-                    fontWeight: 700,
-                    marginBottom: '1.5rem'
-                  }}
-                >
-                  {rec.explanation}
-                </h3>
+                {/* Card Header */}
+                <div className="card-header">
 
-                {/* Route legs */}
+                  <span
+                    className={`persona-badge ${rec.persona ===
+                        'FASTEST'
+                        ? 'tag-fastest'
+                        : rec.persona ===
+                          'SAFEST'
+                          ? 'tag-safest'
+                          : 'tag-balanced'
+                      }`}
+                  >
+                    {rec.persona ||
+                      'ROUTE'}
+                  </span>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems:
+                        'center',
+                      gap: '4px',
+                      fontSize:
+                        '0.75rem',
+                      fontFamily:
+                        'JetBrains Mono'
+                    }}
+                  >
+                    <Clock size={12} />
+
+                    {rec.adjusted_eta ??
+                      '--'}
+                    h
+                  </div>
+
+                </div>
+
+                {/* Route Details */}
                 <div
                   style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.75rem',
-                    borderLeft:
-                      '2px solid #1e293b',
-                    paddingLeft: '1rem',
-                    marginLeft: '0.5rem'
+                    padding: '1.25rem'
                   }}
                 >
 
-                  {Array.isArray(rec.legs) &&
-                    rec.legs.map(
-                      (leg, lIdx) => {
+                  <h3
+                    style={{
+                      fontSize: '0.9rem',
+                      fontWeight: 700,
+                      marginBottom:
+                        '1.5rem'
+                    }}
+                  >
+                    {rec.explanation ||
+                      'Recommended multimodal route.'}
+                  </h3>
 
-                        const isTransfer =
-                          leg.type === 'transfer';
+                  {/* Route Legs */}
+                  <div
+                    style={{
+                      display:
+                        'flex',
+                      flexDirection:
+                        'column',
+                      gap: '0.75rem',
+                      borderLeft:
+                        '2px solid #1e293b',
+                      paddingLeft:
+                        '1rem',
+                      marginLeft:
+                        '0.5rem'
+                    }}
+                  >
 
-                        return (
-                          <div
-                            key={lIdx}
-                            style={{
-                              display: 'flex',
-                              flexDirection:
-                                'column',
-                              opacity:
-                                isTransfer
-                                  ? 0.7
-                                  : 1
-                            }}
-                          >
+                    {Array.isArray(
+                      rec.legs
+                    ) &&
+                      rec.legs.map(
+                        (
+                          leg,
+                          legIndex
+                        ) => {
 
-                            <span
+                          const isTransfer =
+                            leg.type ===
+                            'transfer';
+
+                          return (
+                            <div
+                              key={
+                                legIndex
+                              }
                               style={{
-                                fontSize:
-                                  '0.65rem',
-                                fontWeight: 800,
-                                color:
-                                  isTransfer
-                                    ? '#94a3b8'
-                                    : '#3b82f6',
-                                letterSpacing:
-                                  '0.05em',
                                 display:
                                   'flex',
-                                alignItems:
-                                  'center',
-                                gap: '4px'
+                                flexDirection:
+                                  'column',
+                                opacity:
+                                  isTransfer
+                                    ? 0.7
+                                    : 1
                               }}
                             >
 
-                              {getModeIcon(
-                                leg.mode
+                              <span
+                                style={{
+                                  fontSize:
+                                    '0.65rem',
+                                  fontWeight: 800,
+                                  color:
+                                    isTransfer
+                                      ? '#94a3b8'
+                                      : '#3b82f6',
+                                  letterSpacing:
+                                    '0.05em',
+                                  display:
+                                    'flex',
+                                  alignItems:
+                                    'center',
+                                  gap: '4px'
+                                }}
+                              >
+
+                                {getModeIcon(
+                                  leg.mode
+                                )}
+
+                                {isTransfer
+                                  ? 'STRATEGIC HANDOFF'
+                                  : `${String(
+                                    leg.mode ||
+                                    'TRANSIT'
+                                  ).toUpperCase()} TRANSIT`}
+
+                              </span>
+
+                              <span
+                                style={{
+                                  fontSize:
+                                    '0.8rem',
+                                  fontWeight:
+                                    600
+                                }}
+                              >
+                                {isTransfer
+                                  ? `Processing at ${leg.to_name ||
+                                  leg.to ||
+                                  'hub'
+                                  }`
+                                  : `to ${leg.to_name ||
+                                  leg.to ||
+                                  'next hub'
+                                  }`}
+                              </span>
+
+                              {leg.intel_source && (
+                                <span
+                                  style={{
+                                    marginTop:
+                                      '3px',
+                                    fontSize:
+                                      '0.6rem',
+                                    color:
+                                      '#64748b'
+                                  }}
+                                >
+                                  INTEL:{' '}
+                                  {
+                                    leg.intel_source
+                                  }
+                                </span>
                               )}
 
-                              {isTransfer
-                                ? 'STRATEGIC HANDOFF'
-                                : `${leg.mode} TRANSIT`}
+                            </div>
+                          );
+                        }
+                      )}
 
-                            </span>
-
-                            <span
-                              style={{
-                                fontSize:
-                                  '0.8rem',
-                                fontWeight: 600
-                              }}
-                            >
-                              {isTransfer
-                                ? `Processing at ${leg.to_name} `
-                                : `to ${leg.to_name} `}
-                            </span>
-
-                          </div>
-                        );
-                      }
-                    )}
+                  </div>
 
                 </div>
 
-              </div>
-
-              {/* Cost */}
-              <div
-                style={{
-                  padding: '1.25rem',
-                  borderTop:
-                    '1px solid #1e293b',
-                  background:
-                    'rgba(15, 23, 42, 0.3)'
-                }}
-              >
-
+                {/* Cost */}
                 <div
                   style={{
-                    display: 'flex',
-                    justifyContent:
-                      'space-between',
-                    fontSize: '0.8rem',
-                    fontWeight: 700
+                    padding:
+                      '1.25rem',
+                    borderTop:
+                      '1px solid #1e293b',
+                    background:
+                      'rgba(15, 23, 42, 0.3)'
                   }}
                 >
 
-                  <span
+                  <div
                     style={{
-                      color: '#64748b'
+                      display:
+                        'flex',
+                      justifyContent:
+                        'space-between',
+                      fontSize:
+                        '0.8rem',
+                      fontWeight: 700
                     }}
                   >
-                    TOTAL COST
-                  </span>
 
-                  <span
-                    style={{
-                      color: '#10b981'
-                    }}
-                  >
-                    $
-                    {formatNumber(
-                      rec.total_cost
-                    )}
-                  </span>
+                    <span
+                      style={{
+                        color:
+                          '#64748b'
+                      }}
+                    >
+                      TOTAL COST
+                    </span>
+
+                    <span
+                      style={{
+                        color:
+                          '#10b981'
+                      }}
+                    >
+                      $
+                      {formatNumber(
+                        rec.total_cost
+                      )}
+                    </span>
+
+                  </div>
 
                 </div>
 
               </div>
-
-            </div>
-
-          ))}
+            )
+          )}
 
         </div>
 
       </main>
 
-      {/* =========================================================
+      {/* ========================================================
           RIGHT INTELLIGENCE PANEL
-      ========================================================= */}
+      ======================================================== */}
 
       <aside className="sidebar-right">
 
@@ -789,20 +1117,20 @@ const RouteRecommender = ({ onNavigate }) => {
           Decision Integrity Audit
         </h2>
 
-        {recommendations.length > 0 ? (
+        {recommendations.length >
+          0 ? (
 
           <div
             style={{
-              display: 'flex',
-              flexDirection: 'column',
+              display:
+                'flex',
+              flexDirection:
+                'column',
               gap: '1rem'
             }}
           >
 
-            {/* =================================================
-                AI DELAY INTELLIGENCE
-            ================================================= */}
-
+            {/* AI DELAY INTELLIGENCE */}
             {(() => {
               const prediction =
                 getMLPrediction(
@@ -812,6 +1140,14 @@ const RouteRecommender = ({ onNavigate }) => {
               if (!prediction) {
                 return null;
               }
+
+              const predictedDelay =
+                prediction.predicted_delay_hours ??
+                prediction.delay_hours ??
+                prediction.predicted_delay;
+
+              const confidence =
+                prediction.confidence;
 
               return (
                 <div
@@ -829,9 +1165,12 @@ const RouteRecommender = ({ onNavigate }) => {
                       marginBottom:
                         '0.75rem',
                       fontWeight: 700,
-                      color: '#f8fafc',
-                      display: 'flex',
-                      alignItems: 'center',
+                      color:
+                        '#f8fafc',
+                      display:
+                        'flex',
+                      alignItems:
+                        'center',
                       gap: '0.5rem'
                     }}
                   >
@@ -846,9 +1185,7 @@ const RouteRecommender = ({ onNavigate }) => {
                   <div>
                     Predicted Delay:{' '}
                     <strong>
-                      {prediction.predicted_delay_hours ??
-                        prediction.delay_hours ??
-                        prediction.predicted_delay ??
+                      {predictedDelay ??
                         '--'}
                       h
                     </strong>
@@ -857,14 +1194,12 @@ const RouteRecommender = ({ onNavigate }) => {
                   <div>
                     Confidence:{' '}
                     <strong>
-                      {prediction.confidence != null
+                      {confidence != null
                         ? `${(
                           Number(
-                            prediction.confidence
-                          ) *
-                          100
-                        ).toFixed(1)
-                        }% `
+                            confidence
+                          ) * 100
+                        ).toFixed(1)}%`
                         : '--'}
                     </strong>
                   </div>
@@ -873,7 +1208,9 @@ const RouteRecommender = ({ onNavigate }) => {
                     <div>
                       Risk Level:{' '}
                       <strong>
-                        {prediction.risk_level}
+                        {
+                          prediction.risk_level
+                        }
                       </strong>
                     </div>
                   )}
@@ -889,7 +1226,9 @@ const RouteRecommender = ({ onNavigate }) => {
                           '0.75rem'
                       }}
                     >
-                      {prediction.reason}
+                      {
+                        prediction.reason
+                      }
                     </div>
                   )}
 
@@ -897,10 +1236,7 @@ const RouteRecommender = ({ onNavigate }) => {
               );
             })()}
 
-            {/* =================================================
-                FORENSIC ETA AUDIT
-            ================================================= */}
-
+            {/* FORENSIC ETA */}
             <div
               className="audit-trace-box"
               style={{
@@ -914,7 +1250,8 @@ const RouteRecommender = ({ onNavigate }) => {
                   marginBottom:
                     '0.5rem',
                   fontWeight: 700,
-                  color: '#f8fafc'
+                  color:
+                    '#f8fafc'
                 }}
               >
                 Forensic ETA Audit
@@ -922,13 +1259,20 @@ const RouteRecommender = ({ onNavigate }) => {
 
               <div>
                 Transit:{' '}
-                {recommendations[0]?.audit_trace?.eta?.transit ??
+                {recommendations[0]
+                  ?.audit_trace
+                  ?.eta
+                  ?.transit ??
                   '--'}
                 h
               </div>
 
               <div>
-                Transfer: +{recommendations[0]?.audit_trace?.eta?.transfer ??
+                Transfer: +
+                {recommendations[0]
+                  ?.audit_trace
+                  ?.eta
+                  ?.transfer ??
                   0}
                 h
               </div>
@@ -936,18 +1280,22 @@ const RouteRecommender = ({ onNavigate }) => {
               <div>
                 Scenario Impact:{' '}
                 {Number(
-                  recommendations[0]?.audit_trace?.eta?.scenario
+                  recommendations[0]
+                    ?.audit_trace
+                    ?.eta
+                    ?.scenario
                 ) > 0
-                  ? `+ ${recommendations[0].audit_trace.eta.scenario} h`
+                  ? `+${recommendations[0]
+                    .audit_trace
+                    .eta
+                    .scenario
+                  }h`
                   : 'None'}
               </div>
 
             </div>
 
-            {/* =================================================
-                COST COMPOSITION
-            ================================================= */}
-
+            {/* COST */}
             <div
               className="audit-trace-box"
               style={{
@@ -961,7 +1309,8 @@ const RouteRecommender = ({ onNavigate }) => {
                   marginBottom:
                     '0.5rem',
                   fontWeight: 700,
-                  color: '#f8fafc'
+                  color:
+                    '#f8fafc'
                 }}
               >
                 Cost Composition
@@ -999,10 +1348,7 @@ const RouteRecommender = ({ onNavigate }) => {
 
             </div>
 
-            {/* =================================================
-                STRATEGIC TRUTH
-            ================================================= */}
-
+            {/* STRATEGIC TRUTH */}
             <div
               className="audit-trace-box"
               style={{
@@ -1016,7 +1362,8 @@ const RouteRecommender = ({ onNavigate }) => {
                   marginBottom:
                     '0.5rem',
                   fontWeight: 700,
-                  color: '#f8fafc'
+                  color:
+                    '#f8fafc'
                 }}
               >
                 Strategic Truth Anchor
@@ -1037,9 +1384,12 @@ const RouteRecommender = ({ onNavigate }) => {
 
           <div
             style={{
-              textAlign: 'center',
-              color: '#64748b',
-              marginTop: '2rem'
+              textAlign:
+                'center',
+              color:
+                '#64748b',
+              marginTop:
+                '2rem'
             }}
           >
 
@@ -1047,17 +1397,19 @@ const RouteRecommender = ({ onNavigate }) => {
               size={48}
               style={{
                 opacity: 0.1,
-                marginBottom: '1rem'
+                marginBottom:
+                  '1rem'
               }}
             />
 
             <p
               style={{
-                fontSize: '0.8rem'
+                fontSize:
+                  '0.8rem'
               }}
             >
-              Awaiting operational data
-              stream...
+              Awaiting operational
+              data stream...
             </p>
 
           </div>
@@ -1067,19 +1419,24 @@ const RouteRecommender = ({ onNavigate }) => {
         {/* Verification */}
         <div
           style={{
-            marginTop: 'auto'
+            marginTop:
+              'auto'
           }}
         >
 
           <div
             style={{
-              display: 'flex',
-              alignItems: 'center',
+              display:
+                'flex',
+              alignItems:
+                'center',
               gap: '0.5rem',
               background:
                 'rgba(59, 130, 246, 0.1)',
-              padding: '0.75rem',
-              borderRadius: '8px',
+              padding:
+                '0.75rem',
+              borderRadius:
+                '8px',
               border:
                 '1px solid #3b82f6'
             }}
@@ -1092,9 +1449,12 @@ const RouteRecommender = ({ onNavigate }) => {
 
             <span
               style={{
-                fontSize: '0.65rem',
-                fontWeight: 800,
-                color: '#3b82f6'
+                fontSize:
+                  '0.65rem',
+                fontWeight:
+                  800,
+                color:
+                  '#3b82f6'
               }}
             >
               TRUTH AUDIT VERIFIED
@@ -1106,17 +1466,20 @@ const RouteRecommender = ({ onNavigate }) => {
 
       </aside>
 
-      {/* =========================================================
+      {/* ========================================================
           TRADEOFF STRIP
-      ========================================================= */}
+      ======================================================== */}
 
       <footer className="tradeoff-strip">
 
         <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem'
+            display:
+              'flex',
+            alignItems:
+              'center',
+            gap:
+              '0.75rem'
           }}
         >
 
@@ -1127,9 +1490,12 @@ const RouteRecommender = ({ onNavigate }) => {
 
           <span
             style={{
-              fontSize: '0.75rem',
-              fontWeight: 800,
-              color: '#64748b'
+              fontSize:
+                '0.75rem',
+              fontWeight:
+                800,
+              color:
+                '#64748b'
             }}
           >
             TRADEOFF ANALYSIS
@@ -1139,27 +1505,37 @@ const RouteRecommender = ({ onNavigate }) => {
 
         <div
           style={{
-            display: 'flex',
-            gap: '3rem',
-            flex: 1,
-            justifyContent: 'center'
+            display:
+              'flex',
+            gap:
+              '3rem',
+            flex:
+              1,
+            justifyContent:
+              'center'
           }}
         >
 
           {/* Speed */}
           <div
             style={{
-              display: 'flex',
-              gap: '0.5rem',
-              alignItems: 'center'
+              display:
+                'flex',
+              gap:
+                '0.5rem',
+              alignItems:
+                'center'
             }}
           >
 
             <span
               style={{
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                color: '#94a3b8'
+                fontSize:
+                  '0.7rem',
+                fontWeight:
+                  700,
+                color:
+                  '#94a3b8'
               }}
             >
               OPTIMAL SPEED:
@@ -1167,12 +1543,16 @@ const RouteRecommender = ({ onNavigate }) => {
 
             <span
               style={{
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                color: '#f59e0b'
+                fontSize:
+                  '0.9rem',
+                fontWeight:
+                  800,
+                color:
+                  '#f59e0b'
               }}
             >
-              {recommendations[0]?.adjusted_eta ??
+              {recommendations[0]
+                ?.adjusted_eta ??
                 '--'}
               h
             </span>
@@ -1182,17 +1562,23 @@ const RouteRecommender = ({ onNavigate }) => {
           {/* Cost */}
           <div
             style={{
-              display: 'flex',
-              gap: '0.5rem',
-              alignItems: 'center'
+              display:
+                'flex',
+              gap:
+                '0.5rem',
+              alignItems:
+                'center'
             }}
           >
 
             <span
               style={{
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                color: '#94a3b8'
+                fontSize:
+                  '0.7rem',
+                fontWeight:
+                  700,
+                color:
+                  '#94a3b8'
               }}
             >
               LOWEST COST:
@@ -1200,19 +1586,24 @@ const RouteRecommender = ({ onNavigate }) => {
 
             <span
               style={{
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                color: '#10b981'
+                fontSize:
+                  '0.9rem',
+                fontWeight:
+                  800,
+                color:
+                  '#10b981'
               }}
             >
               $
-              {recommendations.length > 0
+              {recommendations.length >
+                0
                 ? Math.min(
                   ...recommendations.map(
-                    r =>
+                    route =>
                       Number(
-                        r.total_cost
-                      ) || Infinity
+                        route.total_cost
+                      ) ||
+                      Infinity
                   )
                 ).toLocaleString()
                 : '--'}
@@ -1223,17 +1614,23 @@ const RouteRecommender = ({ onNavigate }) => {
           {/* Risk */}
           <div
             style={{
-              display: 'flex',
-              gap: '0.5rem',
-              alignItems: 'center'
+              display:
+                'flex',
+              gap:
+                '0.5rem',
+              alignItems:
+                'center'
             }}
           >
 
             <span
               style={{
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                color: '#94a3b8'
+                fontSize:
+                  '0.7rem',
+                fontWeight:
+                  700,
+                color:
+                  '#94a3b8'
               }}
             >
               RISK FLOOR:
@@ -1241,18 +1638,23 @@ const RouteRecommender = ({ onNavigate }) => {
 
             <span
               style={{
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                color: '#3b82f6'
+                fontSize:
+                  '0.9rem',
+                fontWeight:
+                  800,
+                color:
+                  '#3b82f6'
               }}
             >
-              {recommendations.length > 0
+              {recommendations.length >
+                0
                 ? Math.min(
                   ...recommendations.map(
-                    r =>
+                    route =>
                       (Number(
-                        r.threat_level
-                      ) || 0) * 100
+                        route.threat_level
+                      ) || 0) *
+                      100
                   )
                 )
                 : '--'}
